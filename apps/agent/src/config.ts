@@ -26,8 +26,9 @@ export const config = {
 
   // timing
   streamIdleMs: Number(process.env.STREAM_IDLE_MS ?? "1200"),
-  firstOutputTimeoutMs: Number(process.env.FIRST_OUTPUT_TIMEOUT_MS ?? "30000"),
+  firstOutputTimeoutMs: Number(process.env.FIRST_OUTPUT_TIMEOUT_MS ?? "120000"),
 
   // output chunking
   maxChunkLen: Number(process.env.MAX_CHUNK_LEN ?? "2000")
 } as const;
+

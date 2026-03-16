@@ -1,6 +1,5 @@
 import Fastify from "fastify";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { config, isUserAllowed } from "./config.js";
 import { JsonlAudit } from "./audit.js";
 import { AgentHub, registerAgentWs } from "./ws.js";
@@ -10,6 +9,7 @@ import type { AgentToRelay, Output, Status } from "@bw/protocol";
 
 const audit = new JsonlAudit(config.auditJsonlPath);
 const hub = new AgentHub();
+const outputSeenByMsgId = new Map<string, boolean>();
 
 type SessionState = {
   tool: "cc" | "cx";
@@ -57,6 +57,33 @@ async function safeReply(messageId: string, text: string): Promise<void> {
   }
 }
 
+async function relaySendOrReplyError(params: {
+  messageId: string;
+  sessionKey: string;
+  payload: any;
+  auditData: Record<string, unknown>;
+}): Promise<boolean> {
+  try {
+    hub.send(params.payload);
+    await audit.log({
+      type: "relay.to_agent",
+      sessionKey: params.sessionKey,
+      msgId: params.messageId,
+      data: params.auditData
+    });
+    return true;
+  } catch (err) {
+    await audit.log({
+      type: "error",
+      sessionKey: params.sessionKey,
+      msgId: params.messageId,
+      data: { error: String(err) }
+    });
+    await safeReply(params.messageId, `转发到 agent 失败：${String(err)}`);
+    return false;
+  }
+}
+
 async function onAgentMessage(msg: AgentToRelay): Promise<void> {
   if (msg.type === "output") {
     const out = msg as Output;
@@ -66,10 +93,20 @@ async function onAgentMessage(msg: AgentToRelay): Promise<void> {
       msgId: out.msgId,
       data: { streamId: out.streamId, isFinal: out.isFinal, len: out.chunk.length }
     });
-    // ignore empty chunks (e.g. final marker)
-    if (out.chunk && out.chunk.trim().length > 0) {
+
+    const hasText = Boolean(out.chunk && out.chunk.trim().length > 0);
+    if (hasText) {
+      outputSeenByMsgId.set(out.msgId, true);
       await safeReply(out.msgId, out.chunk);
+    } else if (out.isFinal) {
+      const seen = outputSeenByMsgId.get(out.msgId) ?? false;
+      if (!seen) {
+        outputSeenByMsgId.set(out.msgId, true);
+        await safeReply(out.msgId, "（无输出：工具可能仍在等待输入/确认，或启动失败）");
+      }
     }
+
+    if (out.isFinal) outputSeenByMsgId.delete(out.msgId);
     return;
   }
 
@@ -86,7 +123,7 @@ async function onAgentMessage(msg: AgentToRelay): Promise<void> {
 
 const fastify = Fastify({ logger: true });
 
-fastify.get('/health', async () => ({ ok: true }));
+fastify.get("/health", async () => ({ ok: true }));
 
 fastify.addContentTypeParser(
   "application/json",
@@ -146,11 +183,13 @@ fastify.post("/feishu/webhook", async (req, reply) => {
         await safeReply(normalized.messageId, "已切换到 cc");
         return reply.send({ ok: true });
       }
+
       if (normalized.command === "/cx") {
         session.tool = "cx";
         await safeReply(normalized.messageId, "已切换到 cx");
         return reply.send({ ok: true });
       }
+
       if (normalized.command === "/mode") {
         const mode = normalized.args.trim().toLowerCase();
         if (mode === "safe" || mode === "yolo") {
@@ -161,6 +200,7 @@ fastify.post("/feishu/webhook", async (req, reply) => {
         }
         return reply.send({ ok: true });
       }
+
       if (normalized.command === "/cwd") {
         const next = normalized.args.trim();
         if (!next) {
@@ -175,29 +215,45 @@ fastify.post("/feishu/webhook", async (req, reply) => {
         await safeReply(normalized.messageId, `cwd=${next}`);
         return reply.send({ ok: true });
       }
+
       if (normalized.command === "/status") {
-        await hub.send({
-          type: "control",
+        const ok = await relaySendOrReplyError({
+          messageId: normalized.messageId,
           sessionKey: normalized.sessionKey,
-          action: "status"
+          payload: { type: "control", sessionKey: normalized.sessionKey, action: "status" },
+          auditData: { type: "control", action: "status" }
         });
+        if (!ok) return reply.send({ ok: true });
+
         await safeReply(
           normalized.messageId,
           `tool=${session.tool} mode=${session.mode} cwd=${session.cwd}`
         );
         return reply.send({ ok: true });
       }
+
       if (normalized.command === "/stop") {
-        hub.send({ type: "control", sessionKey: normalized.sessionKey, action: "stop" });
+        const ok = await relaySendOrReplyError({
+          messageId: normalized.messageId,
+          sessionKey: normalized.sessionKey,
+          payload: { type: "control", sessionKey: normalized.sessionKey, action: "stop" },
+          auditData: { type: "control", action: "stop" }
+        });
+        if (!ok) return reply.send({ ok: true });
+
         await safeReply(normalized.messageId, "已发送 stop (Ctrl+C)");
         return reply.send({ ok: true });
       }
+
       if (normalized.command === "/reset") {
-        hub.send({
-          type: "control",
+        const ok = await relaySendOrReplyError({
+          messageId: normalized.messageId,
           sessionKey: normalized.sessionKey,
-          action: "reset"
+          payload: { type: "control", sessionKey: normalized.sessionKey, action: "reset" },
+          auditData: { type: "control", action: "reset" }
         });
+        if (!ok) return reply.send({ ok: true });
+
         await safeReply(normalized.messageId, "已 reset 当前会话");
         return reply.send({ ok: true });
       }
@@ -213,15 +269,24 @@ fastify.post("/feishu/webhook", async (req, reply) => {
       data: { len: normalized.text.length, tool: session.tool, mode: session.mode }
     });
 
-    hub.send({
-      type: "input",
+    outputSeenByMsgId.set(normalized.messageId, false);
+
+    const ok = await relaySendOrReplyError({
+      messageId: normalized.messageId,
       sessionKey: normalized.sessionKey,
-      msgId: normalized.messageId,
-      tool: session.tool,
-      mode: session.mode,
-      cwd: session.cwd,
-      text: normalized.text
+      payload: {
+        type: "input",
+        sessionKey: normalized.sessionKey,
+        msgId: normalized.messageId,
+        tool: session.tool,
+        mode: session.mode,
+        cwd: session.cwd,
+        text: normalized.text
+      },
+      auditData: { type: "input", tool: session.tool, mode: session.mode, cwd: session.cwd }
     });
+
+    if (!ok) return reply.send({ ok: true });
 
     return reply.send({ ok: true });
   } catch (err) {
@@ -232,8 +297,3 @@ fastify.post("/feishu/webhook", async (req, reply) => {
 });
 
 await fastify.listen({ port: config.port, host: "0.0.0.0" });
-
-
-
-
-
