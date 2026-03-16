@@ -53,7 +53,10 @@ export const StatusSchema = z.object({
   mode: ModeSchema,
   cwd: z.string().min(1),
   busy: z.boolean(),
-  queueDepth: z.number().int().nonnegative()
+  queueDepth: z.number().int().nonnegative(),
+  transport: z.enum(["pty", "tmux"]).optional(),
+  targetSession: z.string().optional(),
+  targetPane: z.string().optional()
 });
 export type Status = z.infer<typeof StatusSchema>;
 

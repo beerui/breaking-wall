@@ -1,5 +1,12 @@
 import "dotenv/config";
 
+export type TmuxSessionTarget = {
+  session: string;
+  pane: string;
+};
+
+export type TmuxSessionTargets = Partial<Record<"cc" | "cx", TmuxSessionTarget>>;
+
 function required(name: string): string {
   const val = process.env[name];
   if (!val) throw new Error(`Missing env: ${name}`);
@@ -14,6 +21,24 @@ function parseList(val?: string): string[] {
     .filter(Boolean);
 }
 
+export function parseSessionTargets(val?: string): TmuxSessionTargets {
+  if (!val) return {};
+
+  const out: TmuxSessionTargets = {};
+  for (const item of val.split(";").map((s) => s.trim()).filter(Boolean)) {
+    const [toolRaw, targetRaw] = item.split("=");
+    const tool = toolRaw?.trim();
+    const target = targetRaw?.trim();
+    if ((tool !== "cc" && tool !== "cx") || !target) continue;
+
+    const [session, pane] = target.split(":");
+    if (!session || !pane) continue;
+    out[tool] = { session, pane };
+  }
+
+  return out;
+}
+
 export const config = {
   relayWsUrl: required("RELAY_WS_URL"),
   agentId: required("AGENT_ID"),
@@ -23,6 +48,7 @@ export const config = {
   cxCmdline: process.env.CX_CMDLINE ?? "codex",
 
   workRoots: parseList(process.env.WORK_ROOTS ?? "D:/2026"),
+  tmuxSessionTargets: parseSessionTargets(process.env.TMUX_SESSION_TARGETS),
 
   // timing
   streamIdleMs: Number(process.env.STREAM_IDLE_MS ?? "1200"),
@@ -31,4 +57,3 @@ export const config = {
   // output chunking
   maxChunkLen: Number(process.env.MAX_CHUNK_LEN ?? "2000")
 } as const;
-

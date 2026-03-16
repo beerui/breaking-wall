@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { config } from "../config.js";
 import { autoConfirmResponse } from "../modes/yoloAutoConfirm.js";
-import type { Tool, PtyHandle } from "./ptyManager.js";
-import { PtyManager } from "./ptyManager.js";
+import { PtyManager, type Tool, type PtyController, type PtyExitInfo } from "./ptyManager.js";
 import { getFinalizeDelayMs } from "./streamTiming.js";
 
 export type InputRun = {
@@ -27,6 +26,14 @@ function keyOf(sessionKey: string, tool: Tool): Key {
   return `${tool}::${sessionKey}`;
 }
 
+function parseKey(k: Key): { tool: Tool; sessionKey: string } {
+  const idx = k.indexOf("::");
+  return {
+    tool: k.slice(0, idx) as Tool,
+    sessionKey: k.slice(idx + 2)
+  };
+}
+
 type Active = {
   sessionKey: string;
   msgId: string;
@@ -40,16 +47,18 @@ type Active = {
 
 type Wrapper = {
   cwd: string;
-  handle: PtyHandle;
   attached: boolean;
+  exitAttached: boolean;
 };
 
 export class PtyStreamPool {
-  private readonly mgr = new PtyManager();
   private readonly wrappers = new Map<Key, Wrapper>();
   private readonly active = new Map<Key, Active>();
 
-  constructor(private readonly sink: OutputSink) {}
+  constructor(
+    private readonly sink: OutputSink,
+    private readonly mgr: PtyController = new PtyManager()
+  ) {}
 
   reset(sessionKey: string, tool: Tool): void {
     this.mgr.reset(sessionKey, tool);
@@ -74,16 +83,20 @@ export class PtyStreamPool {
     const handle = this.mgr.getOrCreate(run.sessionKey, run.tool, run.cwd);
 
     if (!this.wrappers.get(k)) {
-      this.wrappers.set(k, { cwd: run.cwd, handle, attached: false });
+      this.wrappers.set(k, { cwd: run.cwd, attached: false, exitAttached: false });
     }
 
     const w = this.wrappers.get(k)!;
     w.cwd = run.cwd;
-    w.handle = handle;
 
     if (!w.attached) {
       handle.onData((data) => this.onData(k, data));
       w.attached = true;
+    }
+
+    if (!w.exitAttached) {
+      handle.onExit((info) => this.onExit(k, info));
+      w.exitAttached = true;
     }
 
     const streamId = randomUUID();
@@ -132,12 +145,38 @@ export class PtyStreamPool {
     if (a.mode === "yolo") {
       const reply = autoConfirmResponse(data);
       if (reply) {
-        const w = this.wrappers.get(k);
-        w?.handle.write(reply);
+        const parsed = parseKey(k);
+        const handle = this.mgr.getOrCreate(parsed.sessionKey, parsed.tool, this.wrappers.get(k)?.cwd ?? "");
+        handle.write(reply);
       }
     }
 
     this.bumpFinalizeTimer(k);
+  }
+
+  private onExit(k: Key, info: PtyExitInfo): void {
+    const parsed = parseKey(k);
+    this.wrappers.delete(k);
+    this.mgr.reset(parsed.sessionKey, parsed.tool);
+
+    const a = this.active.get(k);
+    if (!a) return;
+    if (a.timer) clearTimeout(a.timer);
+
+    const details = typeof info.signal === "number"
+      ? `exitCode=${info.exitCode} signal=${info.signal}`
+      : `exitCode=${info.exitCode}`;
+
+    this.sink({
+      sessionKey: a.sessionKey,
+      msgId: a.msgId,
+      streamId: a.streamId,
+      chunk: `PTY exited before producing output: ${details}`,
+      isFinal: true
+    });
+
+    this.active.delete(k);
+    a.resolve();
   }
 
   private bumpFinalizeTimer(k: Key): void {

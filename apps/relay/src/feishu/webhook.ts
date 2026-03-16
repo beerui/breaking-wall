@@ -48,7 +48,7 @@ export function normalizeFeishuWebhook(params: {
   const decoded = decodeFeishuPayload({
     rawBody: params.rawBody,
     headers: params.headers,
-    encryptKey: params.encryptKey
+    ...(params.encryptKey ? { encryptKey: params.encryptKey } : {})
   });
 
   const body = decoded.decrypted ?? decoded.payload;
@@ -102,7 +102,7 @@ export function normalizeFeishuWebhook(params: {
       sessionKey,
       userId,
       chatId,
-      command: cmd.toLowerCase(),
+      command: cmd!.toLowerCase(),
       args: rest.join(" ")
     };
   }

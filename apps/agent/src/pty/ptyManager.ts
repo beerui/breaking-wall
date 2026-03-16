@@ -1,28 +1,71 @@
-import os from "node:os";
 import type { IPty } from "node-pty";
 import pty from "node-pty";
 import { config } from "../config.js";
 
 export type Tool = "cc" | "cx";
 
+export type PtyExitInfo = {
+  exitCode: number;
+  signal?: number;
+};
+
 export type PtyHandle = {
   write: (data: string) => void;
   resize: (cols: number, rows: number) => void;
   kill: () => void;
   onData: (cb: (data: string) => void) => void;
+  onExit: (cb: (info: PtyExitInfo) => void) => void;
+};
+
+export type PtyController = {
+  reset: (sessionKey: string, tool: Tool) => void;
+  stop: (sessionKey: string, tool: Tool) => void;
+  getOrCreate: (sessionKey: string, tool: Tool, cwd: string) => PtyHandle;
 };
 
 type Key = string;
 
+type WindowsPtySpec = {
+  file: string;
+  args: string[];
+};
+
 function cmdlineForTool(tool: Tool): string {
   return tool === "cc" ? config.ccCmdline : config.cxCmdline;
+}
+
+function toWslPath(cwd: string): string {
+  const normalized = cwd.replace(/\\/g, "/");
+  const m = normalized.match(/^([A-Za-z]):\/(.*)$/);
+  if (!m) return normalized;
+  const drive = m[1]!.toLowerCase();
+  const rest = m[2] ?? "";
+  return `/mnt/${drive}/${rest}`;
+}
+
+function shouldUseWslForCodex(tool: Tool, cmdline: string): boolean {
+  return tool === "cx" && /^codex(?:\s|$)/i.test(cmdline.trim());
+}
+
+export function buildWindowsPtySpec(tool: Tool, cmdline: string, cwd: string): WindowsPtySpec {
+  if (shouldUseWslForCodex(tool, cmdline)) {
+    return {
+      file: "wsl.exe",
+      args: ["--cd", toWslPath(cwd), "bash", "-lc", cmdline]
+    };
+  }
+
+  return {
+    file: "cmd.exe",
+    args: ["/k", cmdline]
+  };
 }
 
 function makeKey(sessionKey: string, tool: Tool): Key {
   return `${sessionKey}:${tool}`;
 }
 
-export class PtyManager {
+export class PtyManager implements PtyController {
   private readonly ptys = new Map<Key, IPty>();
 
   reset(sessionKey: string, tool: Tool): void {
@@ -51,8 +94,9 @@ export class PtyManager {
     if (existing) return this.wrap(existing);
 
     const cmdline = cmdlineForTool(tool);
+    const spec = buildWindowsPtySpec(tool, cmdline, cwd);
 
-    const p = pty.spawn("cmd.exe", ["/c", cmdline], {
+    const p = pty.spawn(spec.file, spec.args, {
       name: "xterm-color",
       cols: 120,
       rows: 40,
@@ -74,6 +118,9 @@ export class PtyManager {
       kill: () => p.kill(),
       onData: (cb) => {
         p.onData(cb);
+      },
+      onExit: (cb) => {
+        p.onExit(({ exitCode, signal }) => cb({ exitCode, ...(signal !== undefined ? { signal } : {}) }));
       }
     };
   }

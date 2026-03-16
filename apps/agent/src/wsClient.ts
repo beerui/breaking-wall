@@ -1,4 +1,5 @@
 import WebSocket from "ws";
+import { randomUUID } from "node:crypto";
 import {
   RelayToAgentSchema,
   safeParseJson,
@@ -8,6 +9,7 @@ import {
 } from "@bw/protocol";
 import { config } from "./config.js";
 import { PtyStreamPool } from "./pty/ptyStream.js";
+import { SharedSessionBridge } from "./tmux/sharedSessionBridge.js";
 import { SessionSerialQueue } from "./sessionQueue.js";
 import { computeReconnectDelayMs } from "./retry.js";
 
@@ -16,6 +18,8 @@ type SessionState = {
   mode: "safe" | "yolo";
   cwd: string;
 };
+
+const useTmux = Object.keys(config.tmuxSessionTargets).length > 0;
 
 export function startAgent(): void {
   const sessionState = new Map<string, SessionState>();
@@ -30,9 +34,15 @@ export function startAgent(): void {
     ws.send(JSON.stringify(msg));
   };
 
-  const pool = new PtyStreamPool((out) => {
+  const pool = useTmux ? undefined : new PtyStreamPool((out) => {
     wsSend({ type: "output", ...out });
   });
+
+  const bridge = useTmux
+    ? new SharedSessionBridge({ targets: config.tmuxSessionTargets })
+    : undefined;
+
+  console.log(`[agent] transport=${useTmux ? "tmux" : "pty"}`);
 
   const scheduleReconnect = (why: string) => {
     if (reconnectTimer) return;
@@ -86,16 +96,47 @@ export function startAgent(): void {
           cwd: input.cwd
         });
 
-        void queue.enqueue(input.sessionKey, async () => {
-          await pool.run({
-            sessionKey: input.sessionKey,
-            msgId: input.msgId,
-            tool: input.tool,
-            mode: input.mode,
-            cwd: input.cwd,
-            text: input.text
+        if (bridge) {
+          // tmux mode: send input and poll output
+          void queue.enqueue(input.sessionKey, async () => {
+            const streamId = randomUUID();
+            try {
+              await bridge.sendInput({ tool: input.tool, text: input.text });
+              // poll output after a short delay
+              await new Promise((r) => setTimeout(r, config.streamIdleMs));
+              const chunk = await bridge.captureOutput({ tool: input.tool });
+              wsSend({
+                type: "output",
+                sessionKey: input.sessionKey,
+                msgId: input.msgId,
+                streamId,
+                chunk,
+                isFinal: true
+              });
+            } catch (err) {
+              wsSend({
+                type: "output",
+                sessionKey: input.sessionKey,
+                msgId: input.msgId,
+                streamId,
+                chunk: `错误: ${String(err instanceof Error ? err.message : err)}`,
+                isFinal: true
+              });
+            }
           });
-        });
+        } else {
+          // pty mode
+          void queue.enqueue(input.sessionKey, async () => {
+            await pool!.run({
+              sessionKey: input.sessionKey,
+              msgId: input.msgId,
+              tool: input.tool,
+              mode: input.mode,
+              cwd: input.cwd,
+              text: input.text
+            });
+          });
+        }
         return;
       }
 
@@ -105,12 +146,17 @@ export function startAgent(): void {
         const tool = st?.tool ?? "cx";
 
         if (ctl.action === "stop") {
-          pool.stop(ctl.sessionKey, tool);
+          if (pool) pool.stop(ctl.sessionKey, tool);
+          // tmux mode: send Ctrl-C
+          if (bridge) {
+            void bridge.sendInput({ tool, text: "" }).catch(() => {});
+          }
           return;
         }
 
         if (ctl.action === "reset") {
-          pool.reset(ctl.sessionKey, tool);
+          if (pool) pool.reset(ctl.sessionKey, tool);
+          // tmux mode: no-op, shared session is externally managed
           return;
         }
 
@@ -118,6 +164,7 @@ export function startAgent(): void {
           const cur =
             st ?? ({ tool: "cx", mode: "safe", cwd: config.workRoots[0] ?? "D:/" } as const);
           const qs = queue.stats(ctl.sessionKey);
+          const target = useTmux ? config.tmuxSessionTargets[cur.tool] : undefined;
           wsSend({
             type: "status",
             sessionKey: ctl.sessionKey,
@@ -125,16 +172,24 @@ export function startAgent(): void {
             mode: cur.mode,
             cwd: cur.cwd,
             busy: qs.busy,
-            queueDepth: qs.queueDepth
+            queueDepth: qs.queueDepth,
+            ...(useTmux ? {
+              transport: "tmux" as const,
+              targetSession: target?.session,
+              targetPane: target?.pane
+            } : {})
           });
           return;
         }
 
         if (ctl.action === "cwd" && typeof ctl.cwd === "string") {
-          const next = st ?? { tool: "cx", mode: "safe", cwd: ctl.cwd };
-          next.cwd = ctl.cwd;
-          sessionState.set(ctl.sessionKey, next);
-          pool.reset(ctl.sessionKey, tool);
+          if (pool) {
+            const next = st ?? { tool: "cx", mode: "safe", cwd: ctl.cwd };
+            next.cwd = ctl.cwd;
+            sessionState.set(ctl.sessionKey, next);
+            pool.reset(ctl.sessionKey, tool);
+          }
+          // tmux mode: cwd is not applicable
         }
       }
     });

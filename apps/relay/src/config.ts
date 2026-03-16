@@ -47,7 +47,9 @@ export const config = {
 
   auditJsonlPath: process.env.AUDIT_JSONL_PATH ?? "./var/audit.jsonl",
 
-  workRoots: parseList(process.env.WORK_ROOTS ?? "D:/2026")
+  workRoots: parseList(process.env.WORK_ROOTS ?? "D:/2026"),
+
+  transport: (process.env.TRANSPORT_MODE ?? "pty") as "pty" | "tmux"
 } as const;
 
 export function assertFeishuConfigured(): void {

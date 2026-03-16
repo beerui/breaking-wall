@@ -147,7 +147,7 @@ fastify.post("/feishu/webhook", async (req, reply) => {
     const normalized = normalizeFeishuWebhook({
       rawBody: raw,
       headers,
-      encryptKey: config.feishu.encryptKey
+      ...(config.feishu.encryptKey ? { encryptKey: config.feishu.encryptKey } : {})
     });
 
     if (normalized.kind === "challenge") {
@@ -191,6 +191,10 @@ fastify.post("/feishu/webhook", async (req, reply) => {
       }
 
       if (normalized.command === "/mode") {
+        if (config.transport === "tmux") {
+          await safeReply(normalized.messageId, "shared-session 模式下不支持 /mode 切换");
+          return reply.send({ ok: true });
+        }
         const mode = normalized.args.trim().toLowerCase();
         if (mode === "safe" || mode === "yolo") {
           session.mode = mode;
@@ -202,6 +206,10 @@ fastify.post("/feishu/webhook", async (req, reply) => {
       }
 
       if (normalized.command === "/cwd") {
+        if (config.transport === "tmux") {
+          await safeReply(normalized.messageId, "shared-session 模式下不支持 /cwd，请在 tmux 会话中直接操作");
+          return reply.send({ ok: true });
+        }
         const next = normalized.args.trim();
         if (!next) {
           await safeReply(normalized.messageId, `cwd=${session.cwd}`);
@@ -225,10 +233,17 @@ fastify.post("/feishu/webhook", async (req, reply) => {
         });
         if (!ok) return reply.send({ ok: true });
 
-        await safeReply(
-          normalized.messageId,
-          `tool=${session.tool} mode=${session.mode} cwd=${session.cwd}`
-        );
+        if (config.transport === "tmux") {
+          await safeReply(
+            normalized.messageId,
+            `tool=${session.tool} transport=tmux (shared-session)`
+          );
+        } else {
+          await safeReply(
+            normalized.messageId,
+            `tool=${session.tool} mode=${session.mode} cwd=${session.cwd}`
+          );
+        }
         return reply.send({ ok: true });
       }
 
@@ -246,6 +261,9 @@ fastify.post("/feishu/webhook", async (req, reply) => {
       }
 
       if (normalized.command === "/reset") {
+        if (config.transport === "tmux") {
+          await safeReply(normalized.messageId, "shared-session 模式下 /reset 仅重置 relay 会话状态，tmux 会话不受影响");
+        }
         const ok = await relaySendOrReplyError({
           messageId: normalized.messageId,
           sessionKey: normalized.sessionKey,
@@ -254,7 +272,9 @@ fastify.post("/feishu/webhook", async (req, reply) => {
         });
         if (!ok) return reply.send({ ok: true });
 
-        await safeReply(normalized.messageId, "已 reset 当前会话");
+        if (config.transport !== "tmux") {
+          await safeReply(normalized.messageId, "已 reset 当前会话");
+        }
         return reply.send({ ok: true });
       }
 

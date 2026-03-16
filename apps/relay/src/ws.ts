@@ -5,6 +5,7 @@ import {
   AgentHelloSchema,
   AgentToRelaySchema,
   safeParseJson,
+  type AgentToRelay,
   type RelayToAgent
 } from "@bw/protocol";
 import { validateAgentToken } from "./config.js";
@@ -45,7 +46,7 @@ function coerceSocket(connectionOrSocket: unknown): WebSocket {
 export async function registerAgentWs(params: {
   fastify: FastifyInstance;
   hub: AgentHub;
-  onAgentMessage: (msg: unknown) => Promise<void>;
+  onAgentMessage: (msg: AgentToRelay) => Promise<void>;
 }): Promise<void> {
   await params.fastify.register(websocketPlugin);
 

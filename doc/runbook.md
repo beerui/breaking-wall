@@ -3,7 +3,9 @@
 这套系统由三部分组成：
 - **飞书应用/Bot**：接收你在飞书里的消息事件，并把输出回发到飞书。
 - **Relay（公网中转服务）**：HTTP 接收飞书 webhook；WS 接收本机 Agent；负责路由、会话状态、审计。
-- **Agent（本机常驻）**：与 Relay 建立 WS 连接；在本机启动并维持 `claude code` 与 `codex` 的交互式 PTY 会话；把输出回传 Relay。
+- **Agent（本机常驻）**：与 Relay 建立 WS 连接；支持两种运行模式：
+  - **PTY 模式**（默认）：在本机启动并维持 `claude code` 与 `codex` 的交互式 PTY 会话。
+  - **tmux 共享会话模式**：通过 WSL 连接已有的 tmux 会话，本地终端与飞书共享同一上下文。
 
 本项目的关键行为（按你要求）：
 - 群聊/私聊默认 **不做 user 隔离**，同一个 `chat_id` 对应一个持续会话上下文。
@@ -213,10 +215,75 @@ server {
 ---
 
 ## 10. 下一步可增强（可选）
-- 输出更智能：合并短 chunk、对超长输出做“继续输出”指令
+- 输出更智能：合并短 chunk、对超长输出做”继续输出”指令
 - 更强的并发/队列：严格把同一会话输入串行化（Relay 侧已预留队列模块，但当前 server.ts 还没接入）
 - 更完善的会话状态持久化（把 sessions 写入 SQLite，而不是内存）
 - 多 Agent 支持（多台电脑，按 agentId 路由）
+
+---
+
+## 11. tmux 共享会话模式（替代 PTY）
+
+tmux 模式让本地终端与飞书共享同一个 `cc/cx` 上下文。你在本地 `tmux attach` 能看到飞书发来的输入和工具输出，反之亦然。
+
+### 11.1 前置条件
+- Windows 上需要安装 WSL（Agent 通过 `wsl.exe` 调用 tmux）
+- WSL 内安装 tmux：
+  ```bash
+  sudo apt-get update && sudo apt-get install -y tmux
+  ```
+
+### 11.2 创建共享会话
+在 WSL 终端中创建两个 tmux 会话，分别运行 cc 和 cx：
+
+```bash
+# 创建 codex 会话
+tmux new-session -d -s bw-cx
+tmux send-keys -t bw-cx “codex” C-m
+
+# 创建 claude code 会话
+tmux new-session -d -s bw-cc
+tmux send-keys -t bw-cc “claude” C-m
+```
+
+本地查看/操作：
+```bash
+tmux attach -t bw-cx   # 查看 codex 会话
+tmux attach -t bw-cc   # 查看 claude code 会话
+# Ctrl+B D 退出 attach（不会关闭会话）
+```
+
+### 11.3 Agent 配置
+在 `apps/agent/.env` 中添加：
+```env
+# tmux 共享会话映射（设置后自动启用 tmux 模式，不再使用 PTY）
+TMUX_SESSION_TARGETS=cc=bw-cc:0;cx=bw-cx:0
+```
+
+格式：`tool=session_name:pane_index`，多个用 `;` 分隔。
+
+### 11.4 Relay 配置
+在 `apps/relay/.env` 中添加：
+```env
+# 设为 tmux 后，/mode 和 /cwd 命令将被禁用
+TRANSPORT_MODE=tmux
+```
+
+### 11.5 tmux 模式下的命令差异
+| 命令 | PTY 模式 | tmux 模式 |
+|------|----------|-----------|
+| `/cc` `/cx` | 切换工具 | 切换工具 |
+| `/status` | 显示 tool/mode/cwd | 显示 tool + tmux target |
+| `/stop` | 发送 Ctrl+C | 发送 Ctrl+C |
+| `/reset` | 重启 PTY | 仅重置 relay 状态，tmux 会话不受影响 |
+| `/mode` | 切换 safe/yolo | 不支持（共享会话下无意义） |
+| `/cwd` | 切换工作目录 | 不支持（请在 tmux 会话中直接操作） |
+
+### 11.6 清理会话
+```bash
+wsl.exe bash -lc “tmux kill-session -t bw-cx || true”
+wsl.exe bash -lc “tmux kill-session -t bw-cc || true”
+```
 
 
 
