@@ -207,7 +207,7 @@ export function startAgent(): void {
       if (parsed.data.type === "control") {
         const ctl = parsed.data as Control;
         const st = sessionState.get(ctl.sessionKey);
-        const tool = st?.tool ?? "cx";
+        const tool = st?.tool ?? "cc";
 
         if (ctl.action === "stop") {
           if (pool) pool.stop(ctl.sessionKey, tool);
@@ -256,7 +256,7 @@ export function startAgent(): void {
 
         if (ctl.action === "status") {
           const cur =
-            st ?? ({ tool: "cx", mode: "safe", cwd: config.workRoots[0] ?? "D:/" } as const);
+            st ?? ({ tool: "cc", mode: "safe", cwd: config.workRoots[0] ?? "D:/" } as const);
           const qs = queue.stats(ctl.sessionKey);
           const target = useTmux ? config.tmuxSessionTargets[cur.tool] : undefined;
           wsSend({
@@ -278,7 +278,7 @@ export function startAgent(): void {
 
         if (ctl.action === "cwd" && typeof ctl.cwd === "string") {
           if (pool) {
-            const next = st ?? { tool: "cx", mode: "safe", cwd: ctl.cwd };
+            const next = st ?? { tool: "cc", mode: "safe", cwd: ctl.cwd };
             next.cwd = ctl.cwd;
             sessionState.set(ctl.sessionKey, next);
             pool.reset(ctl.sessionKey, tool);

@@ -26,7 +26,7 @@ function defaultCwd(): string {
 function getSession(sessionKey: string): SessionState {
   const existing = sessions.get(sessionKey);
   if (existing) return existing;
-  const init: SessionState = { tool: "cx", mode: "safe", cwd: defaultCwd() };
+  const init: SessionState = { tool: "cc", mode: "safe", cwd: defaultCwd() };
   sessions.set(sessionKey, init);
   return init;
 }
