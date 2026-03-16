@@ -13,12 +13,21 @@ describe("SharedSessionBridge", () => {
 
     await bridge.sendInput({ tool: "cx", text: "hi" });
 
+    // first call: send-keys -l (literal text)
     expect(exec).toHaveBeenCalledWith(
       expect.objectContaining({
         file: "wsl.exe",
-        args: ["bash", "-lc", "tmux send-keys -t bw-cx:0 hi C-m"]
+        args: ["bash", "-lc", "tmux send-keys -t bw-cx:0 -l hi"]
       })
     );
+    // second call: send-keys C-m (enter)
+    expect(exec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        file: "wsl.exe",
+        args: ["bash", "-lc", "tmux send-keys -t bw-cx:0 C-m"]
+      })
+    );
+    expect(exec).toHaveBeenCalledTimes(2);
   });
 
   test("returns readable error when tmux session is missing", async () => {

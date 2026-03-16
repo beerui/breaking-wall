@@ -97,20 +97,55 @@ export function startAgent(): void {
         });
 
         if (bridge) {
-          // tmux mode: send input and poll output
+          // tmux mode: send input and poll output until stable
           void queue.enqueue(input.sessionKey, async () => {
             const streamId = randomUUID();
             try {
               await bridge.sendInput({ tool: input.tool, text: input.text });
-              // poll output after a short delay
-              await new Promise((r) => setTimeout(r, config.streamIdleMs));
-              const chunk = await bridge.captureOutput({ tool: input.tool });
+
+              // poll: wait for first output, then keep polling until idle
+              const maxWaitMs = config.firstOutputTimeoutMs;
+              const pollIntervalMs = config.streamIdleMs;
+              const stableRounds = 3; // output unchanged for N rounds → done
+
+              let stableCount = 0;
+              let lastSnapshot = "";
+              let totalWaitMs = 0;
+              let sentAny = false;
+
+              while (totalWaitMs < maxWaitMs) {
+                await new Promise((r) => setTimeout(r, pollIntervalMs));
+                totalWaitMs += pollIntervalMs;
+
+                const chunk = await bridge.captureOutput({ tool: input.tool });
+                if (chunk.length > 0) {
+                  sentAny = true;
+                  stableCount = 0;
+                  wsSend({
+                    type: "output",
+                    sessionKey: input.sessionKey,
+                    msgId: input.msgId,
+                    streamId,
+                    chunk,
+                    isFinal: false
+                  });
+                  lastSnapshot = chunk;
+                } else {
+                  // no new output
+                  if (sentAny) {
+                    stableCount++;
+                    if (stableCount >= stableRounds) break;
+                  }
+                }
+              }
+
+              // send final marker
               wsSend({
                 type: "output",
                 sessionKey: input.sessionKey,
                 msgId: input.msgId,
                 streamId,
-                chunk,
+                chunk: "",
                 isFinal: true
               });
             } catch (err) {
@@ -157,6 +192,36 @@ export function startAgent(): void {
         if (ctl.action === "reset") {
           if (pool) pool.reset(ctl.sessionKey, tool);
           // tmux mode: no-op, shared session is externally managed
+          return;
+        }
+
+        if (ctl.action === "start") {
+          if (bridge) {
+            const startTool = ctl.tool ?? tool;
+            const replyMsgId = ctl.msgId ?? ctl.sessionKey;
+            void (async () => {
+              try {
+                const msg = await bridge.startSession(startTool);
+                wsSend({
+                  type: "output",
+                  sessionKey: ctl.sessionKey,
+                  msgId: replyMsgId,
+                  streamId: randomUUID(),
+                  chunk: msg,
+                  isFinal: true
+                });
+              } catch (err) {
+                wsSend({
+                  type: "output",
+                  sessionKey: ctl.sessionKey,
+                  msgId: replyMsgId,
+                  streamId: randomUUID(),
+                  chunk: `启动失败: ${String(err instanceof Error ? err.message : err)}`,
+                  isFinal: true
+                });
+              }
+            })();
+          }
           return;
         }
 

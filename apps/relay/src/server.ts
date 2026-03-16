@@ -178,6 +178,25 @@ fastify.post("/feishu/webhook", async (req, reply) => {
         data: { command: normalized.command, args: normalized.args }
       });
 
+      if (normalized.command === "/help") {
+        const lines = [
+          "可用命令：",
+          "/cc — 切换到 Claude Code",
+          "/cx — 切换到 Codex",
+          "/start [cc|cx] — 启动 tmux session 并运行 CLI（tmux 模式）",
+          "/stop — 发送 Ctrl+C 中断当前执行",
+          "/reset — 重置当前会话",
+          "/status — 查看当前会话状态",
+          "/mode safe|yolo — 切换安全/YOLO 模式（pty 模式）",
+          "/cwd <path> — 切换工作目录（pty 模式）",
+          "/help — 显示此帮助信息",
+          "",
+          "直接发送文本即可向当前工具发送指令。"
+        ];
+        await safeReply(normalized.messageId, lines.join("\n"));
+        return reply.send({ ok: true });
+      }
+
       if (normalized.command === "/cc") {
         session.tool = "cc";
         await safeReply(normalized.messageId, "已切换到 cc");
@@ -244,6 +263,23 @@ fastify.post("/feishu/webhook", async (req, reply) => {
             `tool=${session.tool} mode=${session.mode} cwd=${session.cwd}`
           );
         }
+        return reply.send({ ok: true });
+      }
+
+      if (normalized.command === "/start") {
+        if (config.transport !== "tmux") {
+          await safeReply(normalized.messageId, "/start 仅在 tmux 模式下可用");
+          return reply.send({ ok: true });
+        }
+        const arg = normalized.args.trim().toLowerCase();
+        const tool = arg === "cc" || arg === "cx" ? arg : session.tool;
+        const ok = await relaySendOrReplyError({
+          messageId: normalized.messageId,
+          sessionKey: normalized.sessionKey,
+          payload: { type: "control", sessionKey: normalized.sessionKey, action: "start", tool, msgId: normalized.messageId },
+          auditData: { type: "control", action: "start", tool }
+        });
+        if (!ok) return reply.send({ ok: true });
         return reply.send({ ok: true });
       }
 

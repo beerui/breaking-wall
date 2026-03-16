@@ -1,5 +1,5 @@
-import type { TmuxSessionTargets } from "../config.js";
-import { buildCapturePaneArgs, buildSendKeysArgs } from "./tmuxClient.js";
+import { config, type TmuxSessionTargets } from "../config.js";
+import { buildCapturePaneArgs, buildSendKeysArgs, buildSendEnterArgs, buildHasSessionArgs, buildNewSessionArgs } from "./tmuxClient.js";
 import { diffPaneOutput } from "./outputDiff.js";
 import { buildWslExecSpec, runExec, type ExecResult, type ExecSpec } from "./wslExec.js";
 
@@ -35,23 +35,65 @@ export class SharedSessionBridge {
   private readonly exec: BridgeExec;
   private readonly targets: TmuxSessionTargets;
   private readonly snapshots = new Map<string, string>();
+  private readonly ensuredSessions = new Set<string>();
 
   constructor(params: { exec?: BridgeExec; targets: TmuxSessionTargets }) {
     this.exec = params.exec ?? runExec;
     this.targets = params.targets;
   }
 
+  async startSession(tool: "cc" | "cx"): Promise<string> {
+    const target = this.mustGetTarget(tool);
+    const session = target.session;
+
+    if (this.ensuredSessions.has(session)) {
+      return `tmux session "${session}" 已在运行`;
+    }
+
+    const hasSpec = buildWslExecSpec(buildHasSessionArgs(session));
+    const hasResult = await this.exec(hasSpec);
+    if (hasResult.code === 0) {
+      this.ensuredSessions.add(session);
+      return `tmux session "${session}" 已在运行`;
+    }
+
+    // session 不存在，创建
+    const newSpec = buildWslExecSpec(buildNewSessionArgs(session));
+    const newResult = await this.exec(newSpec);
+    if (newResult.code !== 0) {
+      throw new Error(`无法创建 tmux session "${session}": ${newResult.stderr}`);
+    }
+
+    // 启动对应的 CLI
+    const cmdline = tool === "cc" ? config.ccCmdline : config.cxCmdline;
+    const launchSpec = buildWslExecSpec(buildSendKeysArgs({ ...target, text: cmdline }));
+    await this.exec(launchSpec);
+    const enterSpec = buildWslExecSpec(buildSendEnterArgs(target));
+    await this.exec(enterSpec);
+
+    console.log(`[tmux] 创建 session "${session}" 并启动 ${cmdline}`);
+    this.ensuredSessions.add(session);
+    return `已创建 tmux session "${session}" 并启动 ${cmdline}`;
+  }
+
   async sendInput(params: { tool: "cc" | "cx"; text: string }): Promise<void> {
     const target = this.mustGetTarget(params.tool);
-    let result: ExecResult;
+    // send text literally (no interpretation of special keys)
     try {
-      const spec = buildWslExecSpec(buildSendKeysArgs({ ...target, text: params.text }));
-      result = await this.exec(spec);
+      const textSpec = buildWslExecSpec(buildSendKeysArgs({ ...target, text: params.text }));
+      const textResult = await this.exec(textSpec);
+      if (textResult.code !== 0) {
+        throw new Error(normalizeTmuxError(textResult.stderr, target));
+      }
+      // then press Enter
+      const enterSpec = buildWslExecSpec(buildSendEnterArgs(target));
+      const enterResult = await this.exec(enterSpec);
+      if (enterResult.code !== 0) {
+        throw new Error(normalizeTmuxError(enterResult.stderr, target));
+      }
     } catch (err) {
+      if (err instanceof Error && err.message.includes("tmux")) throw err;
       throw normalizeExecError(err, target);
-    }
-    if (result.code !== 0) {
-      throw new Error(normalizeTmuxError(result.stderr, target));
     }
   }
 
@@ -70,7 +112,8 @@ export class SharedSessionBridge {
 
     const key = this.targetKey(params.tool);
     const previous = this.snapshots.get(key) ?? "";
-    const current = result.stdout;
+    // trim trailing blank lines from capture-pane output
+    const current = result.stdout.replace(/\n\s*$/g, "\n").trimEnd();
     this.snapshots.set(key, current);
     return diffPaneOutput(previous, current);
   }

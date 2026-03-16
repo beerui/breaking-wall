@@ -1,10 +1,16 @@
 import { describe, expect, test } from "vitest";
-import { buildSendKeysArgs, buildCapturePaneArgs } from "./tmuxClient.js";
+import { buildSendKeysArgs, buildSendEnterArgs, buildCapturePaneArgs } from "./tmuxClient.js";
 
 describe("tmux command builders", () => {
-  test("builds send-keys command for a pane", () => {
+  test("builds send-keys command with literal flag", () => {
     expect(buildSendKeysArgs({ session: "bw-cx", pane: "0", text: "hi" })).toEqual([
-      "tmux", "send-keys", "-t", "bw-cx:0", "hi", "C-m"
+      "tmux", "send-keys", "-t", "bw-cx:0", "-l", "hi"
+    ]);
+  });
+
+  test("builds send-enter command for a pane", () => {
+    expect(buildSendEnterArgs({ session: "bw-cx", pane: "0" })).toEqual([
+      "tmux", "send-keys", "-t", "bw-cx:0", "C-m"
     ]);
   });
 
