@@ -1,0 +1,25 @@
+{
+  "name": "@bw/agent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "predev": "npm -w @bw/protocol run build"
+  },
+  "dependencies": {
+    "@bw/protocol": "0.0.0",
+    "dotenv": "^16.4.5",
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.0"
+  }
+}

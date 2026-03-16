@@ -1,0 +1,15 @@
+{
+  "name": "breaking-wall",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm -ws run build",
+    "test": "npm -ws run test",
+    "dev:relay": "npm -w apps/relay run dev",
+    "dev:agent": "npm -w apps/agent run dev",
+    "postinstall": "npm -w @bw/protocol run build"
+  }
+}
