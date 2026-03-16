@@ -253,3 +253,4 @@ server {
 正常情况下一个 Agent 应该只维持 1 条 WS 连接。
 - 现在 Agent 会打印 `reconnect scheduled`，用于确认是否在异常重连。
 - 如果 Relay 日志里短时间出现大量 `[relay] ws connected`，请重启 Agent，确保只跑了一个 `npm run dev:agent` 进程。
+

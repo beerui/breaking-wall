@@ -24,6 +24,10 @@ export const config = {
 
   workRoots: parseList(process.env.WORK_ROOTS ?? "D:/2026"),
 
+  // timing
   streamIdleMs: Number(process.env.STREAM_IDLE_MS ?? "1200"),
+  firstOutputTimeoutMs: Number(process.env.FIRST_OUTPUT_TIMEOUT_MS ?? "30000"),
+
+  // output chunking
   maxChunkLen: Number(process.env.MAX_CHUNK_LEN ?? "2000")
 } as const;

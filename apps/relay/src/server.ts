@@ -66,7 +66,10 @@ async function onAgentMessage(msg: AgentToRelay): Promise<void> {
       msgId: out.msgId,
       data: { streamId: out.streamId, isFinal: out.isFinal, len: out.chunk.length }
     });
-    await safeReply(out.msgId, out.chunk);
+    // ignore empty chunks (e.g. final marker)
+    if (out.chunk && out.chunk.trim().length > 0) {
+      await safeReply(out.msgId, out.chunk);
+    }
     return;
   }
 
@@ -229,4 +232,8 @@ fastify.post("/feishu/webhook", async (req, reply) => {
 });
 
 await fastify.listen({ port: config.port, host: "0.0.0.0" });
+
+
+
+
 

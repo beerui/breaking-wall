@@ -3,6 +3,7 @@ import { config } from "../config.js";
 import { autoConfirmResponse } from "../modes/yoloAutoConfirm.js";
 import type { Tool, PtyHandle } from "./ptyManager.js";
 import { PtyManager } from "./ptyManager.js";
+import { getFinalizeDelayMs } from "./streamTiming.js";
 
 export type InputRun = {
   sessionKey: string;
@@ -25,16 +26,13 @@ type Key = string;
 function keyOf(sessionKey: string, tool: Tool): Key {
   return `${tool}::${sessionKey}`;
 }
-function parseKey(k: Key): { tool: Tool; sessionKey: string } {
-  const idx = k.indexOf("::");
-  return { tool: k.slice(0, idx) as Tool, sessionKey: k.slice(idx + 2) };
-}
 
 type Active = {
   sessionKey: string;
   msgId: string;
   streamId: string;
   mode: "safe" | "yolo";
+  seenData: boolean;
   resolve: () => void;
   reject: (err: unknown) => void;
   timer?: NodeJS.Timeout;
@@ -96,13 +94,18 @@ export class PtyStreamPool {
         msgId: run.msgId,
         streamId,
         mode: run.mode,
+        seenData: false,
         resolve,
         reject
       };
+
       this.active.set(k, a);
       this.bumpFinalizeTimer(k);
 
-      const input = run.text.endsWith("\n") || run.text.endsWith("\r") ? run.text : run.text + "\r";
+      const input =
+        run.text.endsWith("\n") || run.text.endsWith("\r")
+          ? run.text
+          : run.text + "\r";
       handle.write(input);
     });
   }
@@ -111,7 +114,13 @@ export class PtyStreamPool {
     const a = this.active.get(k);
     if (!a) return;
 
-    const chunk = data.length > config.maxChunkLen ? data.slice(0, config.maxChunkLen) : data;
+    a.seenData = true;
+
+    const chunk =
+      data.length > config.maxChunkLen
+        ? data.slice(0, config.maxChunkLen)
+        : data;
+
     this.sink({
       sessionKey: a.sessionKey,
       msgId: a.msgId,
@@ -135,6 +144,15 @@ export class PtyStreamPool {
     const a = this.active.get(k);
     if (!a) return;
     if (a.timer) clearTimeout(a.timer);
+
+    const delay = getFinalizeDelayMs({
+      seenData: a.seenData,
+      config: {
+        streamIdleMs: config.streamIdleMs,
+        firstOutputTimeoutMs: config.firstOutputTimeoutMs
+      }
+    });
+
     a.timer = setTimeout(() => {
       this.sink({
         sessionKey: a.sessionKey,
@@ -145,6 +163,6 @@ export class PtyStreamPool {
       });
       this.active.delete(k);
       a.resolve();
-    }, config.streamIdleMs);
+    }, delay);
   }
 }
