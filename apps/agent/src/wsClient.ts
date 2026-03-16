@@ -103,40 +103,69 @@ export function startAgent(): void {
             try {
               await bridge.sendInput({ tool: input.tool, text: input.text });
 
-              // poll: wait for first output, then keep polling until idle
               const maxWaitMs = config.firstOutputTimeoutMs;
               const pollIntervalMs = config.streamIdleMs;
-              const stableRounds = 3; // output unchanged for N rounds → done
+              const stableRounds = 3;
+              const flushIntervalMs = pollIntervalMs * 3; // 合并多次 poll 后再发送
 
               let stableCount = 0;
-              let lastSnapshot = "";
               let totalWaitMs = 0;
               let sentAny = false;
+              let buffer = "";
+              let lastFlushMs = 0;
 
               while (totalWaitMs < maxWaitMs) {
                 await new Promise((r) => setTimeout(r, pollIntervalMs));
                 totalWaitMs += pollIntervalMs;
 
                 const chunk = await bridge.captureOutput({ tool: input.tool });
-                if (chunk.length > 0) {
-                  sentAny = true;
+                const meaningful = chunk.trim().length > 0;
+
+                if (meaningful) {
+                  buffer += chunk;
                   stableCount = 0;
+                } else {
+                  if (sentAny || buffer.length > 0) {
+                    stableCount++;
+                  }
+                }
+
+                // 达到 flush 间隔或即将稳定结束时，发送 buffer
+                const sinceFlush = totalWaitMs - lastFlushMs;
+                const shouldFlush = buffer.length > 0 && (
+                  sinceFlush >= flushIntervalMs ||
+                  stableCount >= stableRounds - 1 ||
+                  buffer.length >= config.maxChunkLen
+                );
+
+                if (shouldFlush) {
+                  sentAny = true;
                   wsSend({
                     type: "output",
                     sessionKey: input.sessionKey,
                     msgId: input.msgId,
                     streamId,
-                    chunk,
+                    chunk: buffer,
                     isFinal: false
                   });
-                  lastSnapshot = chunk;
-                } else {
-                  // no new output
-                  if (sentAny) {
-                    stableCount++;
-                    if (stableCount >= stableRounds) break;
-                  }
+                  buffer = "";
+                  lastFlushMs = totalWaitMs;
                 }
+
+                if (stableCount >= stableRounds) break;
+              }
+
+              // flush remaining buffer
+              if (buffer.trim().length > 0) {
+                sentAny = true;
+                wsSend({
+                  type: "output",
+                  sessionKey: input.sessionKey,
+                  msgId: input.msgId,
+                  streamId,
+                  chunk: buffer,
+                  isFinal: false
+                });
               }
 
               // send final marker
@@ -145,7 +174,7 @@ export function startAgent(): void {
                 sessionKey: input.sessionKey,
                 msgId: input.msgId,
                 streamId,
-                chunk: "",
+                chunk: sentAny ? "" : "（无输出）",
                 isFinal: true
               });
             } catch (err) {
