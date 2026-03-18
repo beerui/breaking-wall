@@ -3,6 +3,15 @@ import { buildCapturePaneArgs, buildSendKeysArgs, buildSendEnterArgs, buildHasSe
 import { diffPaneOutput } from "./outputDiff.js";
 import { buildWslExecSpec, runExec, type ExecResult, type ExecSpec } from "./wslExec.js";
 
+function toWslPath(winPath: string): string {
+  const normalized = winPath.replace(/\\/g, "/");
+  const match = normalized.match(/^([A-Za-z]):\/(.*)$/);
+  if (!match) return winPath;
+  const drive = match[1]!.toLowerCase();
+  const rest = match[2] ?? "";
+  return `/mnt/${drive}/${rest}`;
+}
+
 export type BridgeExec = (spec: ExecSpec) => Promise<ExecResult>;
 
 function normalizeTmuxError(stderr: string, target: { session: string; pane: string }): string {
@@ -54,6 +63,14 @@ export class SharedSessionBridge {
     const hasResult = await this.exec(hasSpec);
     if (hasResult.code === 0) {
       this.ensuredSessions.add(session);
+      // 初始化 snapshot，避免首次输入回显历史
+      const key = this.targetKey(tool);
+      const spec = buildWslExecSpec(buildCapturePaneArgs(target));
+      const result = await this.exec(spec);
+      if (result.code === 0) {
+        const current = result.stdout.replace(/\n\s*$/g, "\n").trimEnd();
+        this.snapshots.set(key, current);
+      }
       return `tmux session "${session}" 已在运行`;
     }
 
@@ -64,15 +81,38 @@ export class SharedSessionBridge {
       throw new Error(`无法创建 tmux session "${session}": ${newResult.stderr}`);
     }
 
-    // 启动对应的 CLI
+    // 启动对应的 CLI，先 cd 到工作目录、设置环境变量
     const cmdline = tool === "cc" ? config.ccCmdline : config.cxCmdline;
-    const launchSpec = buildWslExecSpec(buildSendKeysArgs({ ...target, text: cmdline }));
+    const workDir = config.workRoots[0] ?? "D:/";
+    const wslPath = toWslPath(workDir);
+
+    const setupCmds = [
+      `cd ${wslPath}`,
+      process.env.HTTP_PROXY ? `export HTTP_PROXY="${process.env.HTTP_PROXY}"` : "",
+      process.env.HTTPS_PROXY ? `export HTTPS_PROXY="${process.env.HTTPS_PROXY}"` : "",
+      config.anthropicBaseUrl ? `export ANTHROPIC_BASE_URL="${config.anthropicBaseUrl}"` : "",
+      config.anthropicAuthToken ? `export ANTHROPIC_AUTH_TOKEN="${config.anthropicAuthToken}"` : "",
+      config.anthropicModel ? `export ANTHROPIC_MODEL="${config.anthropicModel}"` : "",
+      cmdline
+    ].filter(Boolean).join(" && ");
+
+    const launchSpec = buildWslExecSpec(buildSendKeysArgs({ ...target, text: setupCmds }));
     await this.exec(launchSpec);
     const enterSpec = buildWslExecSpec(buildSendEnterArgs(target));
     await this.exec(enterSpec);
 
     console.log(`[tmux] 创建 session "${session}" 并启动 ${cmdline}`);
     this.ensuredSessions.add(session);
+
+    // 初始化 snapshot
+    const key = this.targetKey(tool);
+    const spec = buildWslExecSpec(buildCapturePaneArgs(target));
+    const result = await this.exec(spec);
+    if (result.code === 0) {
+      const current = result.stdout.replace(/\n\s*$/g, "\n").trimEnd();
+      this.snapshots.set(key, current);
+    }
+
     return `已创建 tmux session "${session}" 并启动 ${cmdline}`;
   }
 

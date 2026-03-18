@@ -96,15 +96,24 @@ export class PtyManager implements PtyController {
     const cmdline = cmdlineForTool(tool);
     const spec = buildWindowsPtySpec(tool, cmdline, cwd);
 
+    const env = { ...process.env };
+
+    // 如果 .env 中配置了代理，则设置到子进程环境
+    if (process.env.HTTP_PROXY) {
+      env.HTTP_PROXY = process.env.HTTP_PROXY;
+      env.http_proxy = process.env.HTTP_PROXY;
+    }
+    if (process.env.HTTPS_PROXY) {
+      env.HTTPS_PROXY = process.env.HTTPS_PROXY;
+      env.https_proxy = process.env.HTTPS_PROXY;
+    }
+
     const p = pty.spawn(spec.file, spec.args, {
       name: "xterm-color",
       cols: 120,
       rows: 40,
       cwd,
-      env: {
-        ...process.env,
-        TERM: "xterm-256color"
-      }
+      env: env as Record<string, string>
     });
 
     this.ptys.set(key, p);

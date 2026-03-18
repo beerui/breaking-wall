@@ -43,6 +43,8 @@ type Active = {
   resolve: () => void;
   reject: (err: unknown) => void;
   timer?: NodeJS.Timeout;
+  buffer: string;
+  lastFlushTime: number;
 };
 
 type Wrapper = {
@@ -109,7 +111,9 @@ export class PtyStreamPool {
         mode: run.mode,
         seenData: false,
         resolve,
-        reject
+        reject,
+        buffer: "",
+        lastFlushTime: Date.now()
       };
 
       this.active.set(k, a);
@@ -128,19 +132,25 @@ export class PtyStreamPool {
     if (!a) return;
 
     a.seenData = true;
+    a.buffer += data;
 
-    const chunk =
-      data.length > config.maxChunkLen
-        ? data.slice(0, config.maxChunkLen)
-        : data;
+    const now = Date.now();
+    const flushInterval = 2000; // 2秒批量发送一次
+    const shouldFlush =
+      a.buffer.length >= config.maxChunkLen ||
+      now - a.lastFlushTime >= flushInterval;
 
-    this.sink({
-      sessionKey: a.sessionKey,
-      msgId: a.msgId,
-      streamId: a.streamId,
-      chunk,
-      isFinal: false
-    });
+    if (shouldFlush && a.buffer.length > 0) {
+      this.sink({
+        sessionKey: a.sessionKey,
+        msgId: a.msgId,
+        streamId: a.streamId,
+        chunk: a.buffer,
+        isFinal: false
+      });
+      a.buffer = "";
+      a.lastFlushTime = now;
+    }
 
     if (a.mode === "yolo") {
       const reply = autoConfirmResponse(data);
@@ -193,6 +203,17 @@ export class PtyStreamPool {
     });
 
     a.timer = setTimeout(() => {
+      // 发送剩余 buffer
+      if (a.buffer.length > 0) {
+        this.sink({
+          sessionKey: a.sessionKey,
+          msgId: a.msgId,
+          streamId: a.streamId,
+          chunk: a.buffer,
+          isFinal: false
+        });
+      }
+      // 发送结束标记
       this.sink({
         sessionKey: a.sessionKey,
         msgId: a.msgId,

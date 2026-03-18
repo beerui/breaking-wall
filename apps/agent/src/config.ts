@@ -50,6 +50,11 @@ export const config = {
   workRoots: parseList(process.env.WORK_ROOTS ?? "D:/2026"),
   tmuxSessionTargets: parseSessionTargets(process.env.TMUX_SESSION_TARGETS),
 
+  // Anthropic API configuration
+  anthropicBaseUrl: process.env.ANTHROPIC_BASE_URL,
+  anthropicAuthToken: process.env.ANTHROPIC_AUTH_TOKEN,
+  anthropicModel: process.env.ANTHROPIC_MODEL,
+
   // timing
   streamIdleMs: Number(process.env.STREAM_IDLE_MS ?? "1200"),
   firstOutputTimeoutMs: Number(process.env.FIRST_OUTPUT_TIMEOUT_MS ?? "120000"),

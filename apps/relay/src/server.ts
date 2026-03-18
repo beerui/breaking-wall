@@ -10,6 +10,7 @@ import type { AgentToRelay, Output, Status } from "@bw/protocol";
 const audit = new JsonlAudit(config.auditJsonlPath);
 const hub = new AgentHub();
 const outputSeenByMsgId = new Map<string, boolean>();
+const outputBufferByMsgId = new Map<string, string>();
 
 type SessionState = {
   tool: "cc" | "cx";
@@ -95,18 +96,26 @@ async function onAgentMessage(msg: AgentToRelay): Promise<void> {
     });
 
     const hasText = Boolean(out.chunk && out.chunk.trim().length > 0);
+
     if (hasText) {
       outputSeenByMsgId.set(out.msgId, true);
-      await safeReply(out.msgId, out.chunk);
-    } else if (out.isFinal) {
-      const seen = outputSeenByMsgId.get(out.msgId) ?? false;
-      if (!seen) {
-        outputSeenByMsgId.set(out.msgId, true);
-        await safeReply(out.msgId, "（无输出：工具可能仍在等待输入/确认，或启动失败）");
-      }
+      const existing = outputBufferByMsgId.get(out.msgId) ?? "";
+      outputBufferByMsgId.set(out.msgId, existing + out.chunk);
     }
 
-    if (out.isFinal) outputSeenByMsgId.delete(out.msgId);
+    if (out.isFinal) {
+      const buffer = outputBufferByMsgId.get(out.msgId) ?? "";
+      const seen = outputSeenByMsgId.get(out.msgId) ?? false;
+
+      if (buffer.trim().length > 0) {
+        await safeReply(out.msgId, buffer);
+      } else if (!seen) {
+        await safeReply(out.msgId, "（无输出：工具可能仍在等待输入/确认，或启动失败）");
+      }
+
+      outputSeenByMsgId.delete(out.msgId);
+      outputBufferByMsgId.delete(out.msgId);
+    }
     return;
   }
 
@@ -185,6 +194,7 @@ fastify.post("/feishu/webhook", async (req, reply) => {
           "/cx — 切换到 Codex",
           "/start [cc|cx] — 启动 tmux session 并运行 CLI（tmux 模式）",
           "/stop — 发送 Ctrl+C 中断当前执行",
+          "/enter — 发送回车键（用于确认提示）",
           "/reset — 重置当前会话",
           "/status — 查看当前会话状态",
           "/mode safe|yolo — 切换安全/YOLO 模式（pty 模式）",
@@ -293,6 +303,19 @@ fastify.post("/feishu/webhook", async (req, reply) => {
         if (!ok) return reply.send({ ok: true });
 
         await safeReply(normalized.messageId, "已发送 stop (Ctrl+C)");
+        return reply.send({ ok: true });
+      }
+
+      if (normalized.command === "/enter") {
+        const ok = await relaySendOrReplyError({
+          messageId: normalized.messageId,
+          sessionKey: normalized.sessionKey,
+          payload: { type: "control", sessionKey: normalized.sessionKey, action: "enter" },
+          auditData: { type: "control", action: "enter" }
+        });
+        if (!ok) return reply.send({ ok: true });
+
+        await safeReply(normalized.messageId, "已发送回车");
         return reply.send({ ok: true });
       }
 

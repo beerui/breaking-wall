@@ -97,7 +97,7 @@ export function startAgent(): void {
         });
 
         if (bridge) {
-          // tmux mode: send input and poll output until stable
+          // tmux mode: send input and poll output until stable, then send once
           void queue.enqueue(input.sessionKey, async () => {
             const streamId = randomUUID();
             try {
@@ -105,14 +105,12 @@ export function startAgent(): void {
 
               const maxWaitMs = config.firstOutputTimeoutMs;
               const pollIntervalMs = config.streamIdleMs;
-              const stableRounds = 3;
-              const flushIntervalMs = pollIntervalMs * 3; // 合并多次 poll 后再发送
+              const stableRounds = 2; // 连续 2 次无输出后再等 2 秒确认
+              const finalWaitMs = 2000; // 无输出后额外等待 2 秒
 
               let stableCount = 0;
               let totalWaitMs = 0;
-              let sentAny = false;
               let buffer = "";
-              let lastFlushMs = 0;
 
               while (totalWaitMs < maxWaitMs) {
                 await new Promise((r) => setTimeout(r, pollIntervalMs));
@@ -124,57 +122,56 @@ export function startAgent(): void {
                 if (meaningful) {
                   buffer += chunk;
                   stableCount = 0;
+
+                  // 检测是否在等待用户确认
+                  const lastLines = buffer.split('\n').slice(-10).join('\n');
+                  if (lastLines.includes('Do you want to proceed?') ||
+                      lastLines.includes('Esc to cancel')) {
+                    // 检测到确认提示，立即发送
+                    wsSend({
+                      type: "output",
+                      sessionKey: input.sessionKey,
+                      msgId: input.msgId,
+                      streamId,
+                      chunk: buffer + "\n\n⚠️ 检测到需要确认，请使用 /enter 发送回车继续。",
+                      isFinal: true
+                    });
+                    return;
+                  }
                 } else {
-                  if (sentAny || buffer.length > 0) {
+                  // 没有新输出
+                  if (buffer.length > 0) {
                     stableCount++;
                   }
                 }
 
-                // 达到 flush 间隔或即将稳定结束时，发送 buffer
-                const sinceFlush = totalWaitMs - lastFlushMs;
-                const shouldFlush = buffer.length > 0 && (
-                  sinceFlush >= flushIntervalMs ||
-                  stableCount >= stableRounds - 1 ||
-                  buffer.length >= config.maxChunkLen
-                );
+                // 连续无输出达到阈值
+                if (stableCount >= stableRounds) {
+                  // 额外等待 2 秒确认真的结束了
+                  await new Promise((r) => setTimeout(r, finalWaitMs));
 
-                if (shouldFlush) {
-                  sentAny = true;
-                  wsSend({
-                    type: "output",
-                    sessionKey: input.sessionKey,
-                    msgId: input.msgId,
-                    streamId,
-                    chunk: buffer,
-                    isFinal: false
-                  });
-                  buffer = "";
-                  lastFlushMs = totalWaitMs;
+                  // 再次检查是否有新输出
+                  const finalChunk = await bridge.captureOutput({ tool: input.tool });
+                  if (finalChunk.trim().length > 0) {
+                    // 还有新输出，继续循环
+                    buffer += finalChunk;
+                    stableCount = 0;
+                    totalWaitMs += finalWaitMs;
+                    continue;
+                  }
+
+                  // 确认结束
+                  break;
                 }
-
-                if (stableCount >= stableRounds) break;
               }
 
-              // flush remaining buffer
-              if (buffer.trim().length > 0) {
-                sentAny = true;
-                wsSend({
-                  type: "output",
-                  sessionKey: input.sessionKey,
-                  msgId: input.msgId,
-                  streamId,
-                  chunk: buffer,
-                  isFinal: false
-                });
-              }
-
-              // send final marker
+              // 只在最后发送一次完整输出
               wsSend({
                 type: "output",
                 sessionKey: input.sessionKey,
                 msgId: input.msgId,
                 streamId,
-                chunk: sentAny ? "" : "（无输出）",
+                chunk: buffer.trim().length > 0 ? buffer : "（无输出）",
                 isFinal: true
               });
             } catch (err) {
@@ -213,7 +210,20 @@ export function startAgent(): void {
           if (pool) pool.stop(ctl.sessionKey, tool);
           // tmux mode: send Ctrl-C
           if (bridge) {
+            void bridge.sendInput({ tool, text: "\x03" }).catch(() => {});
+          }
+          return;
+        }
+
+        if (ctl.action === "enter") {
+          // tmux mode: send Enter
+          if (bridge) {
             void bridge.sendInput({ tool, text: "" }).catch(() => {});
+          }
+          // pty mode: send Enter
+          if (pool) {
+            // PTY 模式下通过 write 发送回车
+            // 这里需要获取 pty handle，暂时不支持
           }
           return;
         }
