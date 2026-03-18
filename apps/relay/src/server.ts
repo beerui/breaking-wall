@@ -11,6 +11,7 @@ const audit = new JsonlAudit(config.auditJsonlPath);
 const hub = new AgentHub();
 const outputSeenByMsgId = new Map<string, boolean>();
 const outputBufferByMsgId = new Map<string, string>();
+const processedMessageIds = new Set<string>();
 
 type SessionState = {
   tool: "cc" | "cx";
@@ -187,6 +188,19 @@ fastify.post("/feishu/webhook", async (req, reply) => {
 
     const session = getSession(normalized.sessionKey);
 
+    // 去重：检查是否已处理过此消息
+    if (processedMessageIds.has(normalized.messageId)) {
+      console.log(`[dedup] 跳过重复消息: ${normalized.messageId}`);
+      return reply.send({ ok: true });
+    }
+    processedMessageIds.add(normalized.messageId);
+
+    // 定期清理旧的消息ID（保留最近1000条）
+    if (processedMessageIds.size > 1000) {
+      const toDelete = Array.from(processedMessageIds).slice(0, 500);
+      toDelete.forEach(id => processedMessageIds.delete(id));
+    }
+
     // 确保 session 有 agentId
     if (!session.agentId) {
       const agent = hub.any();
@@ -206,21 +220,39 @@ fastify.post("/feishu/webhook", async (req, reply) => {
       if (normalized.command === "/help") {
         const lines = [
           "可用命令：",
+          "",
+          "【基础命令】",
           "/cc — 切换到 Claude Code",
           "/cx — 切换到 Codex",
-          "/start [cc|cx] — 启动 tmux session 并运行 CLI（tmux 模式）",
+          "/status — 查看当前会话状态",
+          "/help — 显示此帮助信息",
+          "",
+          "【控制命令】",
           "/stop — 发送 Ctrl+C 中断当前执行",
           "/enter — 发送回车键（用于确认提示）",
           "/reset — 重置当前会话",
-          "/status — 查看当前会话状态",
-          "/mode safe|yolo — 切换安全/YOLO 模式",
-          "/cwd <path> — 切换工作目录（pty 模式）",
-          "/tab — 发送 Tab 键（tmux 模式）",
-          "/esc — 发送 Esc 键（tmux 模式）",
-          "/ctrl+o — 发送 Ctrl+O（tmux 模式）",
-          "/up — 发送向上箭头（tmux 模式）",
-          "/down — 发送向下箭头（tmux 模式）",
-          "/help — 显示此帮助信息",
+          "",
+          "【模式切换】",
+          "/mode safe — 切换到安全模式（需要确认每个操作）",
+          "/mode yolo — 切换到 YOLO 模式（自动执行）",
+          "",
+          "【PTY 模式专用】",
+          "/cwd <path> — 切换工作目录",
+          "",
+          "【Tmux 模式专用】",
+          "/start [cc|cx] — 启动 tmux session 并运行 CLI",
+          "/tab — 发送 Tab 键（用于修改命令）",
+          "/esc — 发送 Esc 键（用于取消操作）",
+          "/ctrl+o — 发送 Ctrl+O（用于展开内容）",
+          "/up — 发送向上箭头（用于选择选项）",
+          "/down — 发送向下箭头（用于选择选项）",
+          "",
+          "【Tmux 常用操作】",
+          "创建会话: tmux new -s bw-cc",
+          "列出会话: tmux ls",
+          "附加会话: tmux attach -t bw-cc",
+          "分离会话: Ctrl+b d",
+          "查看历史: Ctrl+b [（按 q 退出）",
           "",
           "直接发送文本即可向当前工具发送指令。"
         ];

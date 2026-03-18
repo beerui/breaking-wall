@@ -5,7 +5,8 @@
       "mcp__ide__getDiagnostics",
       "Bash(echo:*)",
       "Bash(find . -name *.sh -o -name *.bash -o -name *rc)",
-      "Bash(wsl.exe bash:*)"
+      "Bash(wsl.exe bash:*)",
+      "Bash(git add:*)"
     ]
   }
 }
