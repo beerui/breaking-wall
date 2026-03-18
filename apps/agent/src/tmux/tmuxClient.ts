@@ -15,6 +15,10 @@ export function buildSendEnterArgs(target: TmuxPaneTarget): string[] {
   return ["tmux", "send-keys", "-t", formatTarget(target), "C-m"];
 }
 
+export function buildSendKeyArgs(target: TmuxPaneTarget & { key: string }): string[] {
+  return ["tmux", "send-keys", "-t", formatTarget(target), target.key];
+}
+
 export function buildCapturePaneArgs(target: TmuxPaneTarget): string[] {
   return ["tmux", "capture-pane", "-p", "-t", formatTarget(target)];
 }

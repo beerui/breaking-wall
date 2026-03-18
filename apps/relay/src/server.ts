@@ -16,6 +16,8 @@ type SessionState = {
   tool: "cc" | "cx";
   mode: "safe" | "yolo";
   cwd: string;
+  key: string;
+  agentId: string;
 };
 
 const sessions = new Map<string, SessionState>();
@@ -24,10 +26,16 @@ function defaultCwd(): string {
   return config.workRoots[0] ?? "D:/";
 }
 
-function getSession(sessionKey: string): SessionState {
+function getSession(sessionKey: string, agentId?: string): SessionState {
   const existing = sessions.get(sessionKey);
   if (existing) return existing;
-  const init: SessionState = { tool: "cc", mode: "safe", cwd: defaultCwd() };
+  const init: SessionState = {
+    tool: "cc",
+    mode: "safe",
+    cwd: defaultCwd(),
+    key: sessionKey,
+    agentId: agentId ?? ""
+  };
   sessions.set(sessionKey, init);
   return init;
 }
@@ -179,6 +187,14 @@ fastify.post("/feishu/webhook", async (req, reply) => {
 
     const session = getSession(normalized.sessionKey);
 
+    // 确保 session 有 agentId
+    if (!session.agentId) {
+      const agent = hub.any();
+      if (agent) {
+        session.agentId = agent.agentId;
+      }
+    }
+
     if (normalized.kind === "command") {
       await audit.log({
         type: "feishu.command",
@@ -197,8 +213,13 @@ fastify.post("/feishu/webhook", async (req, reply) => {
           "/enter — 发送回车键（用于确认提示）",
           "/reset — 重置当前会话",
           "/status — 查看当前会话状态",
-          "/mode safe|yolo — 切换安全/YOLO 模式（pty 模式）",
+          "/mode safe|yolo — 切换安全/YOLO 模式",
           "/cwd <path> — 切换工作目录（pty 模式）",
+          "/tab — 发送 Tab 键（tmux 模式）",
+          "/esc — 发送 Esc 键（tmux 模式）",
+          "/ctrl+o — 发送 Ctrl+O（tmux 模式）",
+          "/up — 发送向上箭头（tmux 模式）",
+          "/down — 发送向下箭头（tmux 模式）",
           "/help — 显示此帮助信息",
           "",
           "直接发送文本即可向当前工具发送指令。"
@@ -220,14 +241,28 @@ fastify.post("/feishu/webhook", async (req, reply) => {
       }
 
       if (normalized.command === "/mode") {
-        if (config.transport === "tmux") {
-          await safeReply(normalized.messageId, "shared-session 模式下不支持 /mode 切换");
-          return reply.send({ ok: true });
-        }
         const mode = normalized.args.trim().toLowerCase();
         if (mode === "safe" || mode === "yolo") {
-          session.mode = mode;
-          await safeReply(normalized.messageId, `mode=${mode}`);
+          if (config.transport === "tmux") {
+            // tmux 模式下，通过发送 /permission 命令切换
+            const agent = hub.getAgent(session.agentId);
+            if (!agent) {
+              await safeReply(normalized.messageId, "Agent 未连接");
+              return reply.send({ ok: true });
+            }
+            agent.socket.send(JSON.stringify({
+              type: "control",
+              sessionKey: session.key,
+              action: "permission",
+              mode,
+              msgId: normalized.messageId
+            }));
+            await safeReply(normalized.messageId, `正在切换到 ${mode} 模式...`);
+          } else {
+            // pty 模式下，直接修改 session
+            session.mode = mode;
+            await safeReply(normalized.messageId, `mode=${mode}`);
+          }
         } else {
           await safeReply(normalized.messageId, "用法：/mode safe|yolo");
         }
@@ -250,6 +285,42 @@ fastify.post("/feishu/webhook", async (req, reply) => {
         }
         session.cwd = next;
         await safeReply(normalized.messageId, `cwd=${next}`);
+        return reply.send({ ok: true });
+      }
+
+      // 特殊键命令
+      if (normalized.command === "/tab" || normalized.command === "/esc" ||
+          normalized.command === "/ctrl+o" || normalized.command === "/up" ||
+          normalized.command === "/down") {
+        if (config.transport !== "tmux") {
+          await safeReply(normalized.messageId, "特殊键命令仅在 tmux 模式下支持");
+          return reply.send({ ok: true });
+        }
+
+        const keyMap: Record<string, string> = {
+          "/tab": "Tab",
+          "/esc": "Escape",
+          "/ctrl+o": "C-o",
+          "/up": "Up",
+          "/down": "Down"
+        };
+
+        const key = keyMap[normalized.command];
+        if (key) {
+          const agent = hub.getAgent(session.agentId);
+          if (!agent) {
+            await safeReply(normalized.messageId, "Agent 未连接");
+            return reply.send({ ok: true });
+          }
+          agent.socket.send(JSON.stringify({
+            type: "control",
+            sessionKey: session.key,
+            action: "send_key",
+            key,
+            msgId: normalized.messageId
+          }));
+          await safeReply(normalized.messageId, `已发送 ${normalized.command}`);
+        }
         return reply.send({ ok: true });
       }
 

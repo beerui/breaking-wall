@@ -3,6 +3,8 @@ import { diffPaneOutput } from "./outputDiff.js";
 
 describe("diffPaneOutput", () => {
   test("returns only new trailing output", () => {
-    expect(diffPaneOutput("hello\nworld\n", "hello\nworld\nnext\n")).toBe("next\n");
+    const result = diffPaneOutput("hello\nworld\n", "hello\nworld\nnext\n");
+    expect(result.diff).toBe("next\n");
+    expect(result.isSubstantial).toBe(true);
   });
 });

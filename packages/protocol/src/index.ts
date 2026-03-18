@@ -41,9 +41,11 @@ export type Output = z.infer<typeof OutputSchema>;
 export const ControlSchema = z.object({
   type: z.literal("control"),
   sessionKey: z.string().min(1),
-  action: z.enum(["stop", "reset", "status", "cwd", "start", "enter"]),
+  action: z.enum(["stop", "reset", "status", "cwd", "start", "enter", "permission", "send_key"]),
   cwd: z.string().optional(),
   tool: ToolSchema.optional(),
+  mode: ModeSchema.optional(),
+  key: z.string().optional(),
   msgId: z.string().optional()
 });
 export type Control = z.infer<typeof ControlSchema>;

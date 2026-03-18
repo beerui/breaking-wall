@@ -105,8 +105,8 @@ export function startAgent(): void {
 
               const maxWaitMs = config.firstOutputTimeoutMs;
               const pollIntervalMs = config.streamIdleMs;
-              const stableRounds = 2; // 连续 2 次无输出后再等 2 秒确认
-              const finalWaitMs = 2000; // 无输出后额外等待 2 秒
+              const stableRounds = 5; // 连续 5 次无实质性输出后再等 3 秒确认
+              const finalWaitMs = 3000; // 无输出后额外等待 3 秒
 
               let stableCount = 0;
               let totalWaitMs = 0;
@@ -116,17 +116,22 @@ export function startAgent(): void {
                 await new Promise((r) => setTimeout(r, pollIntervalMs));
                 totalWaitMs += pollIntervalMs;
 
-                const chunk = await bridge.captureOutput({ tool: input.tool });
-                const meaningful = chunk.trim().length > 0;
+                const result = await bridge.captureOutput({ tool: input.tool });
+                const meaningful = result.diff.trim().length > 0;
 
                 if (meaningful) {
-                  buffer += chunk;
-                  stableCount = 0;
+                  buffer += result.diff;
+
+                  // 只有实质性变化才重置稳定计数
+                  if (result.isSubstantial) {
+                    stableCount = 0;
+                  }
 
                   // 检测是否在等待用户确认
                   const lastLines = buffer.split('\n').slice(-10).join('\n');
                   if (lastLines.includes('Do you want to proceed?') ||
-                      lastLines.includes('Esc to cancel')) {
+                      lastLines.includes('Esc to cancel') ||
+                      lastLines.includes('❯')) {
                     // 检测到确认提示，立即发送
                     wsSend({
                       type: "output",
@@ -138,6 +143,14 @@ export function startAgent(): void {
                     });
                     return;
                   }
+
+                  // 检测是否正在运行工具（状态更新）
+                  const isRunning = lastLines.includes('Running...') ||
+                                   lastLines.includes('Transfiguring...');
+                  if (!isRunning && result.isSubstantial) {
+                    // 有实质性输出且不是运行状态，重置计数
+                    stableCount = 0;
+                  }
                 } else {
                   // 没有新输出
                   if (buffer.length > 0) {
@@ -145,17 +158,19 @@ export function startAgent(): void {
                   }
                 }
 
-                // 连续无输出达到阈值
+                // 连续无实质性输出达到阈值
                 if (stableCount >= stableRounds) {
-                  // 额外等待 2 秒确认真的结束了
+                  // 额外等待确认真的结束了
                   await new Promise((r) => setTimeout(r, finalWaitMs));
 
                   // 再次检查是否有新输出
-                  const finalChunk = await bridge.captureOutput({ tool: input.tool });
-                  if (finalChunk.trim().length > 0) {
+                  const finalResult = await bridge.captureOutput({ tool: input.tool });
+                  if (finalResult.diff.trim().length > 0) {
                     // 还有新输出，继续循环
-                    buffer += finalChunk;
-                    stableCount = 0;
+                    buffer += finalResult.diff;
+                    if (finalResult.isSubstantial) {
+                      stableCount = 0;
+                    }
                     totalWaitMs += finalWaitMs;
                     continue;
                   }
@@ -224,6 +239,22 @@ export function startAgent(): void {
           if (pool) {
             // PTY 模式下通过 write 发送回车
             // 这里需要获取 pty handle，暂时不支持
+          }
+          return;
+        }
+
+        if (ctl.action === "permission") {
+          // tmux mode: send /permission command to Claude Code
+          if (bridge && ctl.mode) {
+            void bridge.sendInput({ tool, text: `/permission ${ctl.mode}` }).catch(() => {});
+          }
+          return;
+        }
+
+        if (ctl.action === "send_key") {
+          // tmux mode: send special key
+          if (bridge && ctl.key) {
+            void bridge.sendKey({ tool, key: ctl.key }).catch(() => {});
           }
           return;
         }

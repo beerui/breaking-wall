@@ -31,6 +31,10 @@ export class AgentHub {
     return undefined;
   }
 
+  getAgent(agentId: string): AgentConn | undefined {
+    return this.agents.get(agentId);
+  }
+
   send(msg: RelayToAgent): void {
     const agent = this.any();
     if (!agent) throw new Error("No agent connected");

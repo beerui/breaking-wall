@@ -1,5 +1,5 @@
 import { config, type TmuxSessionTargets } from "../config.js";
-import { buildCapturePaneArgs, buildSendKeysArgs, buildSendEnterArgs, buildHasSessionArgs, buildNewSessionArgs } from "./tmuxClient.js";
+import { buildCapturePaneArgs, buildSendKeysArgs, buildSendEnterArgs, buildSendKeyArgs, buildHasSessionArgs, buildNewSessionArgs } from "./tmuxClient.js";
 import { diffPaneOutput } from "./outputDiff.js";
 import { buildWslExecSpec, runExec, type ExecResult, type ExecSpec } from "./wslExec.js";
 
@@ -137,7 +137,7 @@ export class SharedSessionBridge {
     }
   }
 
-  async captureOutput(params: { tool: "cc" | "cx" }): Promise<string> {
+  async captureOutput(params: { tool: "cc" | "cx" }): Promise<{ diff: string; isSubstantial: boolean }> {
     const target = this.mustGetTarget(params.tool);
     let result: ExecResult;
     try {
@@ -156,6 +156,20 @@ export class SharedSessionBridge {
     const current = result.stdout.replace(/\n\s*$/g, "\n").trimEnd();
     this.snapshots.set(key, current);
     return diffPaneOutput(previous, current);
+  }
+
+  async sendKey(params: { tool: "cc" | "cx"; key: string }): Promise<void> {
+    const target = this.mustGetTarget(params.tool);
+    try {
+      const spec = buildWslExecSpec(buildSendKeyArgs({ ...target, key: params.key }));
+      const result = await this.exec(spec);
+      if (result.code !== 0) {
+        throw new Error(normalizeTmuxError(result.stderr, target));
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("tmux")) throw err;
+      throw normalizeExecError(err, target);
+    }
   }
 
   private mustGetTarget(tool: "cc" | "cx") {

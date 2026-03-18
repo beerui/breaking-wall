@@ -63,8 +63,8 @@ describe("SharedSessionBridge", () => {
   test("captures only new pane output", async () => {
     const exec = vi
       .fn()
-      .mockResolvedValueOnce({ stdout: "hello\n", stderr: "", code: 0 })
-      .mockResolvedValueOnce({ stdout: "hello\nworld\n", stderr: "", code: 0 });
+      .mockResolvedValueOnce({ stdout: "hello", stderr: "", code: 0 })
+      .mockResolvedValueOnce({ stdout: "hello\nworld", stderr: "", code: 0 });
 
     const bridge = new SharedSessionBridge({
       exec,
@@ -73,7 +73,12 @@ describe("SharedSessionBridge", () => {
       }
     });
 
-    expect(await bridge.captureOutput({ tool: "cx" })).toBe("hello\n");
-    expect(await bridge.captureOutput({ tool: "cx" })).toBe("world\n");
+    const result1 = await bridge.captureOutput({ tool: "cx" });
+    expect(result1.diff).toBe("hello");
+    expect(result1.isSubstantial).toBe(true);
+
+    const result2 = await bridge.captureOutput({ tool: "cx" });
+    expect(result2.diff).toBe("\nworld");
+    expect(result2.isSubstantial).toBe(true);
   });
 });
