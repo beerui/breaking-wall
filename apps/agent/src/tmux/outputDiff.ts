@@ -51,19 +51,60 @@ export function diffPaneOutput(previous: string, current: string): DiffResult {
 
   let diff = "";
   if (current.startsWith(previous)) {
+    // Fast path: previous is an exact prefix of current
     diff = current.slice(previous.length);
   } else {
-    const maxOverlap = Math.min(previous.length, current.length);
-    let found = false;
-    for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-      if (previous.slice(previous.length - overlap) === current.slice(0, overlap)) {
-        diff = current.slice(overlap);
-        found = true;
+    // Line-based diff — O(n) where n = number of lines
+    const prevLines = previous.split('\n');
+    const currLines = current.split('\n');
+
+    // Find longest common prefix of lines
+    const minLen = Math.min(prevLines.length, currLines.length);
+    let commonPrefix = 0;
+    for (let i = 0; i < minLen; i++) {
+      if (prevLines[i] === currLines[i]) {
+        commonPrefix = i + 1;
+      } else {
         break;
       }
     }
-    if (!found) {
-      diff = current;
+
+    if (commonPrefix > 0) {
+      // Common prefix found — diff is the remaining lines
+      diff = currLines.slice(commonPrefix).join('\n');
+    } else {
+      // No common prefix — handle scrollback rotation:
+      // find where current content starts within previous lines
+      const firstCurrLine = currLines[0] ?? "";
+      if (firstCurrLine) {
+        let matchIdx = -1;
+        for (let i = 0; i < prevLines.length; i++) {
+          if (prevLines[i] === firstCurrLine) {
+            matchIdx = i;
+            break;
+          }
+        }
+        if (matchIdx >= 0) {
+          // Verify consecutive lines match too
+          let matched = 0;
+          for (let i = 0; i + matchIdx < prevLines.length && i < currLines.length; i++) {
+            if (prevLines[matchIdx + i] === currLines[i]) {
+              matched = i + 1;
+            } else {
+              break;
+            }
+          }
+          if (matched > 0) {
+            diff = currLines.slice(matched).join('\n');
+          } else {
+            diff = current;
+          }
+        } else {
+          diff = current;
+        }
+      } else {
+        diff = current;
+      }
     }
   }
 

@@ -4,7 +4,7 @@ import { config, isUserAllowed } from "./config.js";
 import { JsonlAudit } from "./audit.js";
 import { AgentHub, registerAgentWs } from "./ws.js";
 import { normalizeFeishuWebhook } from "./feishu/webhook.js";
-import { replyText } from "./feishu/send.js";
+import { replyText, replyMarkdown } from "./feishu/send.js";
 import type { AgentToRelay, Output, Status } from "@bw/protocol";
 
 const audit = new JsonlAudit(config.auditJsonlPath);
@@ -52,18 +52,49 @@ function isCwdAllowed(cwd: string): boolean {
 }
 
 function splitForFeishu(text: string, maxLen = 1500): string[] {
+  if (text.length <= maxLen) return [text];
+
   const out: string[] = [];
-  let i = 0;
-  while (i < text.length) {
-    out.push(text.slice(i, i + maxLen));
-    i += maxLen;
+  let remaining = text;
+
+  while (remaining.length > 0) {
+    if (remaining.length <= maxLen) {
+      out.push(remaining);
+      break;
+    }
+
+    const slice = remaining.slice(0, maxLen);
+
+    // Try to split at paragraph boundary (double newline)
+    const paraBreak = slice.lastIndexOf("\n\n");
+    // Fallback: single newline
+    const lineBreak = slice.lastIndexOf("\n");
+
+    let splitAt: number;
+    if (paraBreak > maxLen * 0.3) {
+      splitAt = paraBreak + 2; // include the double newline
+    } else if (lineBreak > maxLen * 0.3) {
+      splitAt = lineBreak + 1;
+    } else {
+      splitAt = maxLen;
+    }
+
+    out.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt);
   }
+
   return out.length ? out : [""];
 }
 
 async function safeReply(messageId: string, text: string): Promise<void> {
   for (const chunk of splitForFeishu(text)) {
     await replyText(messageId, chunk);
+  }
+}
+
+async function safeReplyMarkdown(messageId: string, text: string): Promise<void> {
+  for (const chunk of splitForFeishu(text)) {
+    await replyMarkdown(messageId, chunk);
   }
 }
 
@@ -117,7 +148,7 @@ async function onAgentMessage(msg: AgentToRelay): Promise<void> {
       const seen = outputSeenByMsgId.get(out.msgId) ?? false;
 
       if (buffer.trim().length > 0) {
-        await safeReply(out.msgId, buffer);
+        await safeReplyMarkdown(out.msgId, buffer);
       } else if (!seen) {
         await safeReply(out.msgId, "（无输出：工具可能仍在等待输入/确认，或启动失败）");
       }

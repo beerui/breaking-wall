@@ -6,7 +6,10 @@
       "Bash(echo:*)",
       "Bash(find . -name *.sh -o -name *.bash -o -name *rc)",
       "Bash(wsl.exe bash:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git config:*)",
+      "Bash(npx:*)"
     ]
   }
 }

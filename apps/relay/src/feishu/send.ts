@@ -66,3 +66,36 @@ export async function replyText(messageId: string, text: string): Promise<void> 
     throw new Error(`replyText error: ${data.code} ${data.msg ?? ""}`);
   }
 }
+
+export async function replyMarkdown(messageId: string, content: string): Promise<void> {
+  const token = await getTenantAccessToken();
+  const card = {
+    elements: [{ tag: "markdown", content }]
+  };
+  const resp = await fetch(
+    `https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(
+      messageId
+    )}/reply`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        msg_type: "interactive",
+        content: JSON.stringify(card)
+      })
+    }
+  );
+
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new Error(`replyMarkdown failed: ${resp.status} ${resp.statusText} ${body}`);
+  }
+
+  const data2 = (await resp.json().catch(() => undefined)) as any;
+  if (data2 && typeof data2.code === "number" && data2.code !== 0) {
+    throw new Error(`replyMarkdown error: ${data2.code} ${data2.msg ?? ""}`);
+  }
+}

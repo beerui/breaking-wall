@@ -20,9 +20,11 @@ export function buildSendKeyArgs(target: TmuxPaneTarget & { key: string }): stri
 }
 
 export function buildCapturePaneArgs(target: TmuxPaneTarget): string[] {
-  // -S - captures from the beginning of scrollback history,
-  // preventing data loss when output scrolls beyond the visible pane area
-  return ["tmux", "capture-pane", "-p", "-S", "-", "-t", formatTarget(target)];
+  // -S -500 captures 500 lines above the visible area.
+  // Full scrollback (-S -) caused runaway buffer sizes on agent restart
+  // and O(n²) diff hangs. 500 lines (~550 total with visible) is enough
+  // to catch any single command's output while staying fast.
+  return ["tmux", "capture-pane", "-p", "-S", "-500", "-t", formatTarget(target)];
 }
 
 export function buildHasSessionArgs(session: string): string[] {

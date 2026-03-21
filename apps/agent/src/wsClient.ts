@@ -101,6 +101,10 @@ export function startAgent(): void {
           void queue.enqueue(input.sessionKey, async () => {
             const streamId = randomUUID();
             try {
+              // Seed the snapshot so the first diff after input only
+              // contains new output, not historical scrollback content
+              await bridge.captureOutput({ tool: input.tool });
+
               await bridge.sendInput({ tool: input.tool, text: input.text });
 
               const maxWaitMs = config.firstOutputTimeoutMs;

@@ -16,7 +16,7 @@ describe("tmux command builders", () => {
 
   test("builds capture-pane command for a pane", () => {
     expect(buildCapturePaneArgs({ session: "bw-cx", pane: "0" })).toEqual([
-      "tmux", "capture-pane", "-p", "-t", "bw-cx:0"
+      "tmux", "capture-pane", "-p", "-S", "-500", "-t", "bw-cx:0"
     ]);
   });
 });

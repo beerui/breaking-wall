@@ -11,5 +11,8 @@
     "dev:relay": "npm -w apps/relay run dev",
     "dev:agent": "npm -w apps/agent run dev",
     "postinstall": "npm -w @bw/protocol run build"
+  },
+  "dependencies": {
+    "@rollup/rollup-linux-x64-gnu": "^4.59.0"
   }
 }
