@@ -254,6 +254,8 @@ fastify.post("/feishu/webhook", async (req, reply) => {
           "分离会话: Ctrl+b d",
           "查看历史: Ctrl+b [（按 q 退出）",
           "",
+          "其他 / 开头的命令（如 /init, /compact 等）将直接转发给 CLI 工具。",
+          "",
           "直接发送文本即可向当前工具发送指令。"
         ];
         await safeReply(normalized.messageId, lines.join("\n"));
@@ -440,15 +442,19 @@ fastify.post("/feishu/webhook", async (req, reply) => {
         return reply.send({ ok: true });
       }
 
-      await safeReply(normalized.messageId, "未知命令");
-      return reply.send({ ok: true });
+      // 未识别的 slash 命令 → 作为文本转发给 CLI（如 Claude Code 的 /init, /compact 等）
     }
+
+    // 统一处理文本输入（包括普通文本和未识别的 slash 命令）
+    const inputText = normalized.kind === "text"
+      ? normalized.text
+      : `${normalized.command}${normalized.args ? " " + normalized.args : ""}`;
 
     await audit.log({
       type: "feishu.input",
       sessionKey: normalized.sessionKey,
       msgId: normalized.messageId,
-      data: { len: normalized.text.length, tool: session.tool, mode: session.mode }
+      data: { len: inputText.length, tool: session.tool, mode: session.mode }
     });
 
     outputSeenByMsgId.set(normalized.messageId, false);
@@ -463,7 +469,7 @@ fastify.post("/feishu/webhook", async (req, reply) => {
         tool: session.tool,
         mode: session.mode,
         cwd: session.cwd,
-        text: normalized.text
+        text: inputText
       },
       auditData: { type: "input", tool: session.tool, mode: session.mode, cwd: session.cwd }
     });
