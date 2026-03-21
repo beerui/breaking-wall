@@ -20,7 +20,9 @@ export function buildSendKeyArgs(target: TmuxPaneTarget & { key: string }): stri
 }
 
 export function buildCapturePaneArgs(target: TmuxPaneTarget): string[] {
-  return ["tmux", "capture-pane", "-p", "-t", formatTarget(target)];
+  // -S - captures from the beginning of scrollback history,
+  // preventing data loss when output scrolls beyond the visible pane area
+  return ["tmux", "capture-pane", "-p", "-S", "-", "-t", formatTarget(target)];
 }
 
 export function buildHasSessionArgs(session: string): string[] {

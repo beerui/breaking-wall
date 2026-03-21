@@ -127,18 +127,37 @@ export function startAgent(): void {
                     stableCount = 0;
                   }
 
-                  // 检测是否在等待用户确认
+                  // 检测是否在等待用户确认（选择菜单或确认对话框）
                   const lastLines = buffer.split('\n').slice(-10).join('\n');
-                  if (lastLines.includes('Do you want to proceed?') ||
-                      lastLines.includes('Esc to cancel') ||
-                      lastLines.includes('❯')) {
-                    // 检测到确认提示，立即发送
+                  const isConfirmationPrompt =
+                    lastLines.includes('Enter to confirm') ||
+                    lastLines.includes('Do you want to proceed?') ||
+                    /\(\s*y\s*\/\s*n\s*\)/i.test(lastLines) ||
+                    /\[\s*y\s*\/\s*n\s*\]/i.test(lastLines);
+
+                  if (isConfirmationPrompt) {
+                    // 确认对话框，发送带提示的输出
                     wsSend({
                       type: "output",
                       sessionKey: input.sessionKey,
                       msgId: input.msgId,
                       streamId,
                       chunk: buffer + "\n\n⚠️ 检测到需要确认，请使用 /enter 发送回车继续。",
+                      isFinal: true
+                    });
+                    return;
+                  }
+
+                  // 检测 Claude Code 空闲提示符（命令已完成）
+                  const isIdlePrompt = /^\s*❯\s*$/m.test(lastLines);
+                  if (isIdlePrompt) {
+                    // 正常完成，直接发送输出
+                    wsSend({
+                      type: "output",
+                      sessionKey: input.sessionKey,
+                      msgId: input.msgId,
+                      streamId,
+                      chunk: buffer,
                       isFinal: true
                     });
                     return;
